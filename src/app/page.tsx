@@ -39,12 +39,11 @@ type EditorView = 'edit' | 'preview';
 
 export default function Home() {
   const [naverKeywords, setNaverKeywords] = useState<string[]>([
-    '중고의류', '빈티지 패션', '리세일 시장', '마들렌메모리', '차란', '리클'
+    '중고패션', '중고패션시장', '마들렌메모리', '중고의류시장', '패션리세일'
   ]);
   const [newNaverKeyword, setNewNaverKeyword] = useState<string>('');
   const [googleKeywords, setGoogleKeywords] = useState<string[]>([
-    'Resale as a Service', 'fashion resale market', 'secondhand fashion',
-    'Trove Resale', 'Reflaunt', 'Archive Resale'
+    'Resale as a Service', 'secondhand fashion', 'fashion resale market'
   ]);
   const [newGoogleKeyword, setNewGoogleKeyword] = useState<string>('');
   const [includeInternational, setIncludeInternational] = useState<boolean>(true);
