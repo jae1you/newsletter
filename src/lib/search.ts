@@ -50,75 +50,63 @@ export async function searchNaverNews(query: string, startDate: Date, endDate: D
 }
 
 /**
- * 구글 커스텀 서치 API 연동 - 해외 핵심 미디어 50선 타겟팅
+ * Google News RSS 검색
+ * Google News의 RSS 피드를 활용하여 키워드별 뉴스 검색
+ * https://news.google.com/rss/search?q=키워드
  */
 export async function searchGoogleNews(query: string, startDate: Date, endDate: Date): Promise<NewsResult[]> {
-    const apiKey = process.env.GOOGLE_API_KEY;
-    const cx = process.env.GOOGLE_CX;
-
-    if (!apiKey || !cx) {
-        console.warn('[Google] API keys not found');
-        return [];
-    }
-
     try {
-        // 검색 쿼리 최적화
-        const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${cx}&q=${encodeURIComponent(query)}&num=10`;
+        const Parser = (await import('rss-parser')).default;
+        const parser = new Parser({ timeout: 10000 });
 
-        const response = await fetch(url);
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`[Google] API Error ${response.status}: ${errorText}`);
-            return [];
-        }
+        // 날짜 범위를 Google 검색 형식으로 변환 (after:YYYY-MM-DD before:YYYY-MM-DD)
+        const after = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, '0')}-${String(startDate.getDate()).padStart(2, '0')}`;
+        const before = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, '0')}-${String(endDate.getDate()).padStart(2, '0')}`;
 
-        const data = await response.json();
+        const searchQuery = `${query} after:${after} before:${before}`;
+        const feedUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(searchQuery)}&hl=en&gl=US&ceid=US:en`;
 
-        return (data.items || []).map((item: any) => {
-            let imageUrl = '';
-            const pagemap = item.pagemap || {};
+        console.log(`[Google News] Searching: ${searchQuery}`);
 
-            // 1. 이미지 추출 우선순위 고도화 (주요 미디어 특성 반영)
-            if (pagemap.cse_image?.[0]?.src) {
-                imageUrl = pagemap.cse_image[0].src;
-            } else if (pagemap.metatags?.[0]?.['og:image']) {
-                imageUrl = pagemap.metatags[0]['og:image'];
-            } else if (pagemap.metatags?.[0]?.['twitter:image']) {
-                imageUrl = pagemap.metatags[0]['twitter:image'];
-            } else if (pagemap.metatags?.[0]?.['twitter:image:src']) {
-                imageUrl = pagemap.metatags[0]['twitter:image:src'];
-            } else if (pagemap.cse_thumbnail?.[0]?.src) {
-                imageUrl = pagemap.cse_thumbnail[0].src;
-            }
+        const feed = await parser.parseURL(feedUrl);
 
-            // 2. 날짜 추출 로직 (메타데이터 활용)
-            let pubDate = '';
-            const metatags = pagemap.metatags?.[0] || {};
-            pubDate = metatags['article:published_time'] ||
-                metatags['og:updated_time'] ||
-                metatags['pubdate'] ||
-                metatags['date'] ||
-                '';
-
-            // 3. 출처(매체명) 정제
+        return (feed.items || []).map((item: any) => {
+            // Google News RSS에서 source 추출 (제목에 " - Source" 형태로 포함)
+            let title = item.title || '';
             let sourceName = 'Google News';
-            if (metatags['og:site_name']) {
-                sourceName = metatags['og:site_name'];
-            } else if (item.displayLink) {
-                sourceName = item.displayLink.replace('www.', '');
+
+            const sourceMatch = title.match(/\s-\s([^-]+)$/);
+            if (sourceMatch) {
+                sourceName = sourceMatch[1].trim();
+                title = title.replace(/\s-\s[^-]+$/, '').trim();
             }
 
             return {
-                title: item.title,
-                link: item.link,
-                description: item.snippet || '',
-                image: imageUrl,
-                pubDate: pubDate,
+                title,
+                link: item.link || '',
+                description: item.contentSnippet || item.content || '',
+                pubDate: item.pubDate || item.isoDate || '',
                 source: sourceName
             };
         });
     } catch (error) {
-        console.error('[Google] Fetch Error:', error);
+        console.error(`[Google News] Error searching "${query}":`, error);
         return [];
     }
+}
+
+/**
+ * 모든 키워드에 대해 Google News 검색 수행
+ */
+export async function searchAllGoogleNews(keywords: string[], startDate: Date, endDate: Date): Promise<NewsResult[]> {
+    console.log(`[Google News] Searching ${keywords.length} keywords...`);
+
+    const results = await Promise.all(
+        keywords.map(kw => searchGoogleNews(kw, startDate, endDate))
+    );
+
+    const allNews = results.flat();
+    console.log(`[Google News] Collected ${allNews.length} articles total`);
+
+    return allNews;
 }
