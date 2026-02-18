@@ -547,7 +547,7 @@ export default function Home() {
         <div className="bg-accent/5 px-4 py-1.5 rounded-full text-accent text-xs font-bold mb-4 tracking-widest uppercase">
           Newsletter AI Assistant
         </div>
-        <h1 className="text-4xl font-extrabold mb-2 tracking-tight" style={{ fontFamily: "'Playfair Display', Georgia, serif" }}>Resale Times</h1>
+        <h1 className="text-4xl font-extrabold mb-2 tracking-tight">Resale Times</h1>
         <p className="text-text-muted text-lg font-medium">프리미엄 중고의류 뉴스레터 자동 생성기</p>
       </header>
 
@@ -887,9 +887,9 @@ export default function Home() {
               {/* International articles editor */}
               {editInternational.length > 0 && (
                 <div>
-                  <h3 className="text-base font-bold mb-3 flex items-center gap-2" style={{ fontFamily: "Georgia, serif", letterSpacing: '1px', textTransform: 'uppercase' }}>
+                  <h3 className="text-base font-bold mb-3 flex items-center gap-2 tracking-wide uppercase">
                     Global Resale Trends
-                    <span className="text-xs font-normal text-text-muted normal-case" style={{ letterSpacing: '0' }}>({editInternational.length})</span>
+                    <span className="text-xs font-normal text-text-muted normal-case tracking-normal">({editInternational.length})</span>
                   </h3>
                   {editInternational.map((article, i) => renderEditCard(article, i, 'international', editInternational.length))}
                 </div>
@@ -898,9 +898,9 @@ export default function Home() {
               {/* Domestic articles editor */}
               {editDomestic.length > 0 && (
                 <div>
-                  <h3 className="text-base font-bold mb-3 flex items-center gap-2" style={{ fontFamily: "Georgia, serif", letterSpacing: '1px', textTransform: 'uppercase' }}>
+                  <h3 className="text-base font-bold mb-3 flex items-center gap-2 tracking-wide uppercase">
                     Domestic Market Watch
-                    <span className="text-xs font-normal text-text-muted normal-case" style={{ letterSpacing: '0' }}>({editDomestic.length})</span>
+                    <span className="text-xs font-normal text-text-muted normal-case tracking-normal">({editDomestic.length})</span>
                   </h3>
                   {editDomestic.map((article, i) => renderEditCard(article, i, 'domestic', editDomestic.length))}
                 </div>
@@ -908,9 +908,9 @@ export default function Home() {
 
               {/* Madeleine editor */}
               <div>
-                <h3 className="text-base font-bold mb-3 flex items-center gap-2" style={{ fontFamily: "Georgia, serif", letterSpacing: '1px', textTransform: 'uppercase' }}>
+                <h3 className="text-base font-bold mb-3 flex items-center gap-2 tracking-wide uppercase">
                   Madeleine Memory News
-                  <span className="text-xs font-normal text-text-muted normal-case" style={{ letterSpacing: '0' }}>({editMadeleine.length})</span>
+                  <span className="text-xs font-normal text-text-muted normal-case tracking-normal">({editMadeleine.length})</span>
                 </h3>
                 {editMadeleine.map((item, index) => (
                   <div key={index} className="border border-border rounded-lg p-4 mb-3 relative">
