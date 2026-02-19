@@ -9,7 +9,7 @@ export async function POST(request: Request) {
         }
 
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
+        const timeout = setTimeout(() => controller.abort(), 12000);
 
         let imageUrl = '';
         let faviconUrl = '';
@@ -18,8 +18,11 @@ export async function POST(request: Request) {
             const response = await fetch(url, {
                 signal: controller.signal,
                 headers: {
-                    'User-Agent': 'Mozilla/5.0 (compatible; NewsletterBot/1.0)',
-                    'Accept': 'text/html',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Cache-Control': 'no-cache',
                 },
                 redirect: 'follow',
             });
@@ -52,17 +55,20 @@ export async function POST(request: Request) {
                 /<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i
             );
 
+            // 최종 리다이렉트된 URL 사용 (Google News 등 리다이렉트 처리)
+            const finalUrl = response.url || url;
+
             if (ogImageMatch?.[1]) {
                 imageUrl = ogImageMatch[1];
                 // Handle relative URLs
                 if (imageUrl.startsWith('/')) {
-                    const urlObj = new URL(url);
+                    const urlObj = new URL(finalUrl);
                     imageUrl = `${urlObj.protocol}//${urlObj.host}${imageUrl}`;
                 }
             }
 
-            // Extract domain for favicon
-            const urlObj = new URL(url);
+            // Extract domain for favicon (최종 URL 기준)
+            const urlObj = new URL(finalUrl);
             faviconUrl = `https://www.google.com/s2/favicons?domain=${urlObj.hostname}&sz=32`;
 
         } catch (fetchError) {

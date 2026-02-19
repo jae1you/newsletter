@@ -7,7 +7,7 @@ const openai = new OpenAI({
 
 export async function POST(request: Request) {
     try {
-        const { title, summary, isEnglish } = await request.json();
+        const { title, summary, isEnglish, transformPrompt } = await request.json();
 
         if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === 'your_openai_api_key') {
             return NextResponse.json({
@@ -16,31 +16,32 @@ export async function POST(request: Request) {
             });
         }
 
-        const prompt = `
-      당신은 패션 중고/리세일 산업을 전문으로 다루는 프리미엄 뉴스레터 "Resale Times"의 수석 에디터입니다.
+        const basePrompt = transformPrompt && transformPrompt.trim()
+            ? transformPrompt.trim()
+            : `당신은 패션 중고/리세일 산업을 전문으로 다루는 프리미엄 뉴스레터 "Resale Times"의 수석 에디터입니다.
       Vogue Business, Business of Fashion 수준의 고급스러운 필력을 구사하며,
       교양 있는 독자층이 "이건 꼭 읽어야 해"라고 느낄 수 있는 글을 씁니다.
 
-      기사 제목: ${title}
-      기사 내용: ${summary}
-
       작업 내용:
-      1. ${isEnglish ? '영어를 한국어로 번역하되,' : ''} 제목을 패션 전문지 헤드라인처럼 작성할 것.
+      1. 제목을 패션 전문지 헤드라인처럼 작성할 것.
          - 단순 나열이 아닌, 핵심 인사이트를 담은 날카로운 한 문장
          - 필요시 위트 있는 표현이나 은유를 활용 (과하지 않게)
-         - 예시: "리세일의 봄이 온다" → "중고 패션이 명품을 위협하다: 리세일 플랫폼의 조용한 혁명"
       2. 본문 요약은 정확히 3개의 bullet point(- 형태)로 작성할 것.
          - 각 bullet은 1~2문장, 핵심 팩트와 시사점 중심
-         - 업계 전문가가 읽어도 가치 있는 정보 밀도
          - 마지막 bullet에는 가능하면 시장 전망이나 임팩트를 담을 것
-      3. 문체: 격조 있되 읽기 쉬운 어조. 과도한 감탄사나 이모지 금지.
+      3. 문체: 격조 있되 읽기 쉬운 어조. 과도한 감탄사나 이모지 금지.`;
+
+        const prompt = `${basePrompt}
+
+      기사 제목: ${title}
+      기사 내용: ${summary}
+      ${isEnglish ? '\n      ※ 영어 기사이므로 한국어로 번역하여 작성할 것.' : ''}
 
       응답은 반드시 JSON 형식으로만:
       {
         "title": "가공된 제목",
         "summary": "- bullet 1\\n- bullet 2\\n- bullet 3"
-      }
-    `;
+      }`;
 
         const completion = await openai.chat.completions.create({
             model: "gpt-4o",

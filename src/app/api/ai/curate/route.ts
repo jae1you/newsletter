@@ -15,7 +15,7 @@ interface ArticleInput {
 
 export async function POST(request: Request) {
     try {
-        const { articles } = await request.json() as { articles: ArticleInput[] };
+        const { articles, systemPrompt } = await request.json() as { articles: ArticleInput[]; systemPrompt?: string };
 
         if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === 'your_openai_api_key') {
             // Fallback: return first 3 of each category
@@ -29,15 +29,19 @@ export async function POST(request: Request) {
         const domesticArticles = articles.filter(a => a.source === 'Naver');
         const internationalArticles = articles.filter(a => a.source !== 'Naver');
 
-        const prompt = `당신은 패션 중고/리세일 산업 전문 뉴스레터 큐레이터입니다.
+        const baseSystemPrompt = systemPrompt && systemPrompt.trim()
+            ? systemPrompt.trim()
+            : `당신은 패션 중고/리세일 산업 전문 뉴스레터 큐레이터입니다.
 
 아래 기사 목록에서 뉴스레터에 실을 기사를 선별해 주세요.
 
-## 선별 기준
+선별 기준:
 - 패션 중고/리세일/빈티지 산업과의 관련성
 - 뉴스 가치 (신규성, 영향력)
 - 주제 다양성 (같은 내용 반복 방지)
-- 독자 관심도
+- 독자 관심도`;
+
+        const prompt = `${baseSystemPrompt}
 
 ## 국내 기사 목록
 ${domesticArticles.map(a => `[${a.id}] ${a.title} - ${a.summary.slice(0, 100)}`).join('\n')}

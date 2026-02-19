@@ -22,6 +22,7 @@ interface MadeleineNewsItem {
   title: string;
   content: string;
   link: string;
+  imageUrl?: string;
 }
 
 interface EditableArticle {
@@ -54,10 +55,17 @@ export default function Home() {
   const [isTransformingTotal, setIsTransformingTotal] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'naver' | 'international'>('naver');
   const [rssStatus, setRssStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [curationSystemPrompt, setCurationSystemPrompt] = useState<string>(
+    `당신은 패션 중고/리세일 산업 전문 뉴스레터 큐레이터입니다.\n\n아래 기사 목록에서 뉴스레터에 실을 기사를 선별해 주세요.\n\n선별 기준:\n- 패션 중고/리세일/빈티지 산업과의 관련성\n- 뉴스 가치 (신규성, 영향력)\n- 주제 다양성 (같은 내용 반복 방지)\n- 독자 관심도`
+  );
+  const [transformPrompt, setTransformPrompt] = useState<string>(
+    `당신은 패션 중고/리세일 산업을 전문으로 다루는 프리미엄 뉴스레터 "Resale Times"의 수석 에디터입니다.\nVogue Business, Business of Fashion 수준의 고급스러운 필력을 구사하며,\n교양 있는 독자층이 "이건 꼭 읽어야 해"라고 느낄 수 있는 글을 씁니다.\n\n작업 내용:\n1. 제목을 패션 전문지 헤드라인처럼 작성할 것.\n   - 영어는 한글로 번역\n   - 단순 나열이 아닌, 핵심 인사이트를 담은 날카로운 한 문장\n   - 필요시 위트 있는 표현이나 은유를 활용 (과하지 않게)\n2. 본문 요약은 정확히 3개의 bullet point(- 형태)로 작성할 것.\n   - 각 bullet은 1~2문장, 핵심 팩트와 시사점 중심\n   - 마지막 bullet에는 가능하면 시장 전망이나 임팩트를 담을 것\n3. 문체: 격조 있되 읽기 쉬운 어조. 과도한 감탄사나 이모지 금지.\n4. 영어 기사인 경우 제목과 본문 모두 한국어로 작성할 것.`
+  );
 
   // Curation states
   const [currentStep, setCurrentStep] = useState<Step>('collect');
   const [isCurating, setIsCurating] = useState(false);
+  const [isTransformingCurated, setIsTransformingCurated] = useState(false);
   const [curatedDomestic, setCuratedDomestic] = useState<string[]>([]);
   const [curatedInternational, setCuratedInternational] = useState<string[]>([]);
   const [curationReasoning, setCurationReasoning] = useState('');
@@ -135,7 +143,31 @@ export default function Home() {
         });
 
         const hasInternational = newData.some(n => n.source !== 'Naver');
-        setRssStatus(includeInternational ? (hasInternational ? 'success' : 'error') : 'idle');
+        if (includeInternational) {
+          setRssStatus(hasInternational ? 'success' : 'idle');
+        } else {
+          setRssStatus('idle');
+        }
+
+        // 수집된 기사의 OG 이미지를 백그라운드에서 병렬 로드
+        const newItems = newData.filter(n => !n.ogImageUrl && n.link);
+        if (newItems.length > 0) {
+          Promise.allSettled(
+            newItems.map(item =>
+              fetchOgImage(item.link).then(ogData => {
+                if (ogData.imageUrl) {
+                  setNewsList(prev =>
+                    prev.map(n =>
+                      n.id === item.id
+                        ? { ...n, ogImageUrl: ogData.imageUrl, faviconUrl: ogData.faviconUrl }
+                        : n
+                    )
+                  );
+                }
+              })
+            )
+          );
+        }
       }
     } catch (error) {
       console.error('Fetch error:', error);
@@ -171,26 +203,28 @@ export default function Home() {
         const response = await fetch('/api/ai/transform', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: item.title, summary: item.summary, isEnglish })
+          body: JSON.stringify({ title: item.title, summary: item.summary, isEnglish, transformPrompt })
         });
         const result = await response.json();
 
-        let finalImageUrl = item.imageUrl;
-        if (!finalImageUrl) {
-          const imgResponse = await fetch('/api/ai/generate-image', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt: item.title })
-          });
-          const imgResult = await imgResponse.json();
-          finalImageUrl = imgResult.imageUrl;
+        // OG 이미지가 없으면 자동으로 가져오기
+        if (!item.ogImageUrl) {
+          try {
+            const ogData = await fetchOgImage(item.link);
+            updatedNews[index] = {
+              ...updatedNews[index],
+              ogImageUrl: ogData.imageUrl,
+              faviconUrl: ogData.faviconUrl,
+            };
+          } catch {
+            // ignore
+          }
         }
 
         updatedNews[index] = {
-          ...item,
+          ...updatedNews[index],
           transformedTitle: result.title,
           transformedSummary: result.summary,
-          imageUrl: finalImageUrl,
           isTransforming: false
         };
         setNewsList([...updatedNews]);
@@ -218,7 +252,7 @@ export default function Home() {
     }
   }, []);
 
-  // AI Auto-Curation
+  // AI Auto-Curation — 선별만 하고 Step 2로 이동
   const handleCurate = async () => {
     if (newsList.length === 0) {
       alert('먼저 뉴스를 수집해 주세요.');
@@ -237,7 +271,7 @@ export default function Home() {
       const response = await fetch('/api/ai/curate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ articles })
+        body: JSON.stringify({ articles, systemPrompt: curationSystemPrompt })
       });
 
       if (!response.ok) throw new Error('Curation failed');
@@ -246,59 +280,7 @@ export default function Home() {
       setCuratedDomestic(result.domestic || []);
       setCuratedInternational(result.international || []);
       setCurationReasoning(result.reasoning || '');
-
-      const allCurated = [...(result.domestic || []), ...(result.international || [])];
-      setSelectedIds(allCurated);
-
-      // Auto-transform + fetch OG images for curated articles
-      const updatedNews = [...newsList];
-      for (const id of allCurated) {
-        const index = updatedNews.findIndex(n => n.id === id);
-        if (index === -1) continue;
-
-        const item = updatedNews[index];
-
-        // Skip if already transformed
-        if (!item.transformedTitle) {
-          updatedNews[index] = { ...updatedNews[index], isTransforming: true };
-          setNewsList([...updatedNews]);
-
-          try {
-            const isEnglish = /[a-zA-Z]/.test(item.title);
-            const resp = await fetch('/api/ai/transform', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ title: item.title, summary: item.summary, isEnglish })
-            });
-            const transformResult = await resp.json();
-
-            updatedNews[index] = {
-              ...updatedNews[index],
-              transformedTitle: transformResult.title,
-              transformedSummary: transformResult.summary,
-              isTransforming: false
-            };
-          } catch {
-            updatedNews[index] = { ...updatedNews[index], isTransforming: false };
-          }
-        }
-
-        // Fetch OG image if not already set
-        if (!item.ogImageUrl) {
-          try {
-            const ogData = await fetchOgImage(item.link);
-            updatedNews[index] = {
-              ...updatedNews[index],
-              ogImageUrl: ogData.imageUrl,
-              faviconUrl: ogData.faviconUrl
-            };
-          } catch {
-            // ignore
-          }
-        }
-
-        setNewsList([...updatedNews]);
-      }
+      setSelectedIds([...(result.domestic || []), ...(result.international || [])]);
 
       setCurrentStep('curate');
     } catch (error) {
@@ -307,6 +289,64 @@ export default function Home() {
     } finally {
       setIsCurating(false);
     }
+  };
+
+  // 선별 확정 후 transform + OG 이미지 로드 → Step 3
+  const handleConfirmCuration = async () => {
+    const allCurated = [...curatedDomestic, ...curatedInternational];
+    if (allCurated.length === 0) return;
+
+    setIsTransformingCurated(true);
+    const updatedNews = [...newsList];
+
+    for (const id of allCurated) {
+      const index = updatedNews.findIndex(n => n.id === id);
+      if (index === -1) continue;
+
+      const item = updatedNews[index];
+
+      if (!item.transformedTitle) {
+        updatedNews[index] = { ...updatedNews[index], isTransforming: true };
+        setNewsList([...updatedNews]);
+
+        try {
+          const isEnglish = /[a-zA-Z]/.test(item.title);
+          const resp = await fetch('/api/ai/transform', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: item.title, summary: item.summary, isEnglish, transformPrompt })
+          });
+          const transformResult = await resp.json();
+
+          updatedNews[index] = {
+            ...updatedNews[index],
+            transformedTitle: transformResult.title,
+            transformedSummary: transformResult.summary,
+            isTransforming: false
+          };
+        } catch {
+          updatedNews[index] = { ...updatedNews[index], isTransforming: false };
+        }
+      }
+
+      if (!item.ogImageUrl) {
+        try {
+          const ogData = await fetchOgImage(item.link);
+          updatedNews[index] = {
+            ...updatedNews[index],
+            ogImageUrl: ogData.imageUrl,
+            faviconUrl: ogData.faviconUrl
+          };
+        } catch {
+          // ignore
+        }
+      }
+
+      setNewsList([...updatedNews]);
+    }
+
+    setIsTransformingCurated(false);
+    handleGoToEditor();
   };
 
   const toggleCuratedArticle = (id: string, section: 'domestic' | 'international') => {
@@ -335,6 +375,19 @@ export default function Home() {
     setMadeleineNews(updated);
   };
 
+  const handleMadeleineImageUpload = (index: number, file: File) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      setMadeleineNews(prev => {
+        const updated = [...prev];
+        updated[index] = { ...updated[index], imageUrl: dataUrl };
+        return updated;
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
   // Prepare editor data and go to Step 3
   const handleGoToEditor = () => {
     const toEditable = (ids: string[]): EditableArticle[] =>
@@ -354,7 +407,7 @@ export default function Home() {
 
     setEditDomestic(toEditable(curatedDomestic));
     setEditInternational(toEditable(curatedInternational));
-    setEditMadeleine(madeleineNews.filter(m => m.title.trim()));
+    setEditMadeleine(madeleineNews.filter(m => m.title.trim()).map(m => ({ ...m })));
     setEditorView('edit');
     setCurrentStep('newsletter');
   };
@@ -383,6 +436,19 @@ export default function Home() {
       [copy[index], copy[newIndex]] = [copy[newIndex], copy[index]];
       return copy;
     });
+  };
+
+  const handleEditMadeleineImageUpload = (index: number, file: File) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      setEditMadeleine(prev => {
+        const updated = [...prev];
+        updated[index] = { ...updated[index], imageUrl: dataUrl };
+        return updated;
+      });
+    };
+    reader.readAsDataURL(file);
   };
 
   const addEditMadeleineItem = () => {
@@ -415,7 +481,7 @@ export default function Home() {
           issueNumber,
           domestic: editDomestic,
           international: editInternational,
-          madeleineNews: editMadeleine.filter(m => m.title.trim())
+          madeleineNews: editMadeleine.filter(m => m.title.trim()).map(m => ({ ...m }))
         })
       });
 
@@ -522,13 +588,35 @@ export default function Home() {
         </div>
       </div>
       <div className="mt-2 grid grid-cols-2 gap-2">
-        <input
-          type="text"
-          value={article.imageUrl}
-          onChange={(ev) => updateEditArticle(section, index, 'imageUrl', ev.target.value)}
-          className="input-field text-xs"
-          placeholder="이미지 URL"
-        />
+        <div className="flex gap-1">
+          <input
+            type="text"
+            value={article.imageUrl}
+            onChange={(ev) => updateEditArticle(section, index, 'imageUrl', ev.target.value)}
+            className="input-field text-xs flex-1 min-w-0"
+            placeholder="이미지 URL"
+          />
+          <label className="cursor-pointer flex-shrink-0 flex items-center gap-1 text-xs font-bold text-accent border border-accent/30 px-2 py-1 rounded hover:bg-accent/5 transition-colors whitespace-nowrap">
+            📎
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(ev) => {
+                const file = ev.target.files?.[0];
+                if (file) {
+                  const reader = new FileReader();
+                  reader.onload = (e) => {
+                    const dataUrl = e.target?.result as string;
+                    updateEditArticle(section, index, 'imageUrl', dataUrl);
+                  };
+                  reader.readAsDataURL(file);
+                }
+                ev.target.value = '';
+              }}
+            />
+          </label>
+        </div>
         <input
           type="text"
           value={article.link}
@@ -660,9 +748,32 @@ export default function Home() {
             </button>
 
             {newsList.length > 0 && (
-              <button onClick={handleCurate} disabled={isCurating || isTransformingTotal} className="w-full py-4 text-base font-bold flex items-center justify-center gap-3 rounded-lg border-2 border-accent text-accent hover:bg-accent hover:text-white transition-all">
-                {isCurating ? (<><span className="w-4 h-4 border-2 border-accent/20 border-t-accent rounded-full animate-spin"></span>AI 큐레이션 중...</>) : (<>🤖 AI 자동 큐레이션</>)}
-              </button>
+              <>
+                {(curatedDomestic.length > 0 || curatedInternational.length > 0) && (
+                  <button
+                    onClick={() => setCurrentStep('curate')}
+                    className="w-full py-3 text-sm font-bold flex items-center justify-center gap-2 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 transition-all"
+                  >
+                    📋 이전 큐레이션 결과 보기
+                  </button>
+                )}
+                <section className="premium-card">
+                  <h2 className="text-sm font-bold mb-2 flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 bg-accent rounded-full"></span>
+                    기사 큐레이션 프롬프트
+                  </h2>
+                  <p className="text-[10px] text-text-muted mb-2">어떤 기사를 뽑을지 AI에게 지시합니다.</p>
+                  <textarea
+                    value={curationSystemPrompt}
+                    onChange={(e) => setCurationSystemPrompt(e.target.value)}
+                    className="input-field text-xs min-h-[100px] resize-y font-mono leading-relaxed"
+                    placeholder="AI 큐레이션에 사용할 프롬프트를 입력하세요..."
+                  />
+                </section>
+                <button onClick={handleCurate} disabled={isCurating || isTransformingTotal} className="w-full py-4 text-base font-bold flex items-center justify-center gap-3 rounded-lg border-2 border-accent text-accent hover:bg-accent hover:text-white transition-all">
+                  {isCurating ? (<><span className="w-4 h-4 border-2 border-accent/20 border-t-accent rounded-full animate-spin"></span>AI 큐레이션 중...</>) : (<>🤖 AI 자동 큐레이션</>)}
+                </button>
+              </>
             )}
           </aside>
 
@@ -693,7 +804,7 @@ export default function Home() {
                           <div className="text-accent flex items-center gap-2 font-bold animate-pulse text-sm">AI 분석 중...</div>
                         </div>
                       )}
-                      <NewsCard item={{ ...item, title: item.transformedTitle || item.title, summary: item.transformedSummary || item.summary }} isSelected={selectedIds.includes(item.id)} onToggle={toggleSelection} />
+                      <NewsCard item={{ ...item, title: item.transformedTitle || item.title, summary: item.transformedSummary || item.summary, ogImageUrl: item.ogImageUrl }} isSelected={selectedIds.includes(item.id)} onToggle={toggleSelection} />
                       {item.transformedTitle && <div className="absolute top-2 left-2 bg-accent text-white text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-tighter shadow-sm z-20">AI ENHANCED</div>}
                     </div>
                   ))}
@@ -725,74 +836,88 @@ export default function Home() {
         <div className="space-y-8">
           {curationReasoning && (
             <div className="premium-card bg-blue-50/50 border-blue-200">
-              <p className="text-sm text-blue-800 font-medium">
-                <span className="font-bold">AI 선별 근거:</span> {curationReasoning}
-              </p>
+              <p className="text-xs font-bold text-blue-600 uppercase tracking-widest mb-2">AI 선별 근거</p>
+              <div className="text-sm text-blue-800 prose prose-sm max-w-none prose-p:my-1 prose-li:my-0.5 prose-ul:my-1 prose-strong:text-blue-900">
+                {curationReasoning.split('\n').map((line, i) => {
+                  if (line.startsWith('## ')) return <h3 key={i} className="font-bold text-blue-900 mt-2 mb-1 text-sm">{line.replace('## ', '')}</h3>;
+                  if (line.startsWith('# ')) return <h2 key={i} className="font-bold text-blue-900 mt-2 mb-1">{line.replace('# ', '')}</h2>;
+                  if (line.startsWith('- ') || line.startsWith('* ')) return <div key={i} className="flex gap-1.5 items-start"><span className="mt-1 text-blue-400 flex-shrink-0">•</span><span>{line.replace(/^[-*]\s/, '')}</span></div>;
+                  if (/^\d+\.\s/.test(line)) return <div key={i} className="flex gap-1.5 items-start"><span className="text-blue-400 flex-shrink-0 font-bold">{line.match(/^\d+/)?.[0]}.</span><span>{line.replace(/^\d+\.\s/, '')}</span></div>;
+                  if (line.trim() === '') return <div key={i} className="h-1" />;
+                  return <p key={i} className="my-0.5">{line}</p>;
+                })}
+              </div>
             </div>
           )}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            {/* 해외 기사 전체 목록 */}
             <div>
-              <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
+              <h2 className="text-lg font-bold mb-1 flex items-center gap-2">
                 <span className="text-xl">🌏</span>
-                해외 기사 ({curatedInternational.length}개 선별)
+                해외 기사
               </h2>
-              <div className="space-y-3">
-                {curatedInternational.map(id => {
-                  const article = getArticleById(id);
-                  if (!article) return null;
+              <p className="text-xs text-text-muted mb-3">
+                전체 {filteredNews.international.length}건 · <span className="text-accent font-bold">{curatedInternational.length}개 선택됨</span>
+              </p>
+              <div className="space-y-2">
+                {filteredNews.international.map(article => {
+                  const isChecked = curatedInternational.includes(article.id);
                   return (
-                    <div key={id} className="premium-card flex items-start gap-3 py-3 px-4">
-                      <input type="checkbox" checked={true} onChange={() => toggleCuratedArticle(id, 'international')} className="w-4 h-4 accent-accent mt-1 cursor-pointer" />
+                    <div
+                      key={article.id}
+                      onClick={() => toggleCuratedArticle(article.id, 'international')}
+                      className={`premium-card flex items-start gap-3 py-3 px-4 cursor-pointer transition-all ${isChecked ? 'border-accent ring-1 ring-accent/20 bg-accent/[0.02]' : 'opacity-60 hover:opacity-100'}`}
+                    >
+                      <input type="checkbox" checked={isChecked} onChange={() => toggleCuratedArticle(article.id, 'international')} onClick={e => e.stopPropagation()} className="w-4 h-4 accent-accent mt-1 cursor-pointer flex-shrink-0" />
                       <div className="flex-1 min-w-0">
-                        <h4 className="text-sm font-bold truncate">{article.transformedTitle || article.title}</h4>
-                        <p className="text-xs text-text-muted mt-1 line-clamp-2">{article.transformedSummary || article.summary}</p>
+                        <h4 className="text-sm font-bold line-clamp-2 leading-snug">{article.title}</h4>
+                        <p className="text-xs text-text-muted mt-1 line-clamp-2">{article.summary}</p>
                       </div>
-                      {article.ogImageUrl && <img src={article.ogImageUrl} alt="" className="w-16 h-16 rounded object-cover flex-shrink-0" />}
+                      {(article.ogImageUrl || article.imageUrl) && (
+                        <img src={article.ogImageUrl || article.imageUrl} alt="" className="w-14 h-14 rounded object-cover flex-shrink-0" />
+                      )}
                     </div>
                   );
                 })}
-                {filteredNews.international.filter(n => !curatedInternational.includes(n.id)).slice(0, 5).map(article => (
-                  <div key={article.id} className="premium-card flex items-start gap-3 py-3 px-4 opacity-50 hover:opacity-100 transition-opacity">
-                    <input type="checkbox" checked={false} onChange={() => toggleCuratedArticle(article.id, 'international')} className="w-4 h-4 accent-accent mt-1 cursor-pointer" />
-                    <div className="flex-1 min-w-0">
-                      <h4 className="text-sm font-bold truncate">{article.transformedTitle || article.title}</h4>
-                      <p className="text-xs text-text-muted mt-1 line-clamp-2">{article.transformedSummary || article.summary}</p>
-                    </div>
-                  </div>
-                ))}
+                {filteredNews.international.length === 0 && (
+                  <p className="text-xs text-text-muted py-4 text-center">수집된 해외 기사가 없습니다.</p>
+                )}
               </div>
             </div>
 
+            {/* 국내 기사 전체 목록 */}
             <div>
-              <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
+              <h2 className="text-lg font-bold mb-1 flex items-center gap-2">
                 <span className="text-xl">🇰🇷</span>
-                국내 기사 ({curatedDomestic.length}개 선별)
+                국내 기사
               </h2>
-              <div className="space-y-3">
-                {curatedDomestic.map(id => {
-                  const article = getArticleById(id);
-                  if (!article) return null;
+              <p className="text-xs text-text-muted mb-3">
+                전체 {filteredNews.naver.length}건 · <span className="text-accent font-bold">{curatedDomestic.length}개 선택됨</span>
+              </p>
+              <div className="space-y-2">
+                {filteredNews.naver.map(article => {
+                  const isChecked = curatedDomestic.includes(article.id);
                   return (
-                    <div key={id} className="premium-card flex items-start gap-3 py-3 px-4">
-                      <input type="checkbox" checked={true} onChange={() => toggleCuratedArticle(id, 'domestic')} className="w-4 h-4 accent-accent mt-1 cursor-pointer" />
+                    <div
+                      key={article.id}
+                      onClick={() => toggleCuratedArticle(article.id, 'domestic')}
+                      className={`premium-card flex items-start gap-3 py-3 px-4 cursor-pointer transition-all ${isChecked ? 'border-accent ring-1 ring-accent/20 bg-accent/[0.02]' : 'opacity-60 hover:opacity-100'}`}
+                    >
+                      <input type="checkbox" checked={isChecked} onChange={() => toggleCuratedArticle(article.id, 'domestic')} onClick={e => e.stopPropagation()} className="w-4 h-4 accent-accent mt-1 cursor-pointer flex-shrink-0" />
                       <div className="flex-1 min-w-0">
-                        <h4 className="text-sm font-bold truncate">{article.transformedTitle || article.title}</h4>
-                        <p className="text-xs text-text-muted mt-1 line-clamp-2">{article.transformedSummary || article.summary}</p>
+                        <h4 className="text-sm font-bold line-clamp-2 leading-snug">{article.title}</h4>
+                        <p className="text-xs text-text-muted mt-1 line-clamp-2">{article.summary}</p>
                       </div>
-                      {article.ogImageUrl && <img src={article.ogImageUrl} alt="" className="w-16 h-16 rounded object-cover flex-shrink-0" />}
+                      {(article.ogImageUrl || article.imageUrl) && (
+                        <img src={article.ogImageUrl || article.imageUrl} alt="" className="w-14 h-14 rounded object-cover flex-shrink-0" />
+                      )}
                     </div>
                   );
                 })}
-                {filteredNews.naver.filter(n => !curatedDomestic.includes(n.id)).slice(0, 5).map(article => (
-                  <div key={article.id} className="premium-card flex items-start gap-3 py-3 px-4 opacity-50 hover:opacity-100 transition-opacity">
-                    <input type="checkbox" checked={false} onChange={() => toggleCuratedArticle(article.id, 'domestic')} className="w-4 h-4 accent-accent mt-1 cursor-pointer" />
-                    <div className="flex-1 min-w-0">
-                      <h4 className="text-sm font-bold truncate">{article.transformedTitle || article.title}</h4>
-                      <p className="text-xs text-text-muted mt-1 line-clamp-2">{article.transformedSummary || article.summary}</p>
-                    </div>
-                  </div>
-                ))}
+                {filteredNews.naver.length === 0 && (
+                  <p className="text-xs text-text-muted py-4 text-center">수집된 국내 기사가 없습니다.</p>
+                )}
               </div>
             </div>
           </div>
@@ -811,20 +936,67 @@ export default function Home() {
                 )}
                 <input type="text" placeholder="제목" className="input-field text-sm mb-2 font-bold" value={item.title} onChange={(e) => updateMadeleineItem(index, 'title', e.target.value)} />
                 <textarea placeholder="내용" className="input-field text-sm mb-2 min-h-[60px] resize-y" value={item.content} onChange={(e) => updateMadeleineItem(index, 'content', e.target.value)} />
-                <input type="text" placeholder="링크 (선택사항)" className="input-field text-sm" value={item.link} onChange={(e) => updateMadeleineItem(index, 'link', e.target.value)} />
+                <input type="text" placeholder="링크 (선택사항)" className="input-field text-sm mb-2" value={item.link} onChange={(e) => updateMadeleineItem(index, 'link', e.target.value)} />
+                <div className="flex items-center gap-3 mt-1">
+                  {item.imageUrl ? (
+                    <div className="relative w-20 h-20 rounded overflow-hidden border border-border bg-gray-50 flex-shrink-0">
+                      <img src={item.imageUrl} alt="" className="w-full h-full object-cover" />
+                      <button
+                        onClick={() => updateMadeleineItem(index, 'imageUrl', '')}
+                        className="absolute top-0.5 right-0.5 w-5 h-5 bg-black/60 text-white text-[10px] rounded flex items-center justify-center hover:bg-red-500"
+                      >×</button>
+                    </div>
+                  ) : null}
+                  <label className="cursor-pointer flex items-center gap-2 text-xs font-bold text-accent border border-accent/30 px-3 py-1.5 rounded hover:bg-accent/5 transition-colors">
+                    📎 이미지 첨부
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleMadeleineImageUpload(index, file);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                  {item.imageUrl && <span className="text-[10px] text-text-muted">이미지 첨부됨</span>}
+                </div>
               </div>
             ))}
             <button onClick={addMadeleineItem} className="text-sm text-accent font-bold hover:underline">+ 항목 추가</button>
           </div>
 
-          <div className="flex justify-center gap-4">
+          {/* 제목/본문 재작성 프롬프트 */}
+          <div className="premium-card">
+            <h2 className="text-sm font-bold mb-2 flex items-center gap-2">
+              <span className="w-1.5 h-1.5 bg-accent rounded-full"></span>
+              제목/본문 재작성 프롬프트
+            </h2>
+            <p className="text-[10px] text-text-muted mb-2">기사 확정 후 제목과 본문을 어떻게 재작성할지 AI에게 지시합니다.</p>
+            <textarea
+              value={transformPrompt}
+              onChange={(e) => setTransformPrompt(e.target.value)}
+              className="input-field text-xs min-h-[100px] resize-y font-mono leading-relaxed"
+              placeholder="제목/본문 재작성에 사용할 프롬프트를 입력하세요..."
+            />
+          </div>
+
+          <div className="flex justify-center gap-4 flex-wrap">
             <button onClick={() => setCurrentStep('collect')} className="px-6 py-3 rounded-lg text-sm font-bold border border-border text-text-muted hover:bg-gray-50 transition-colors">뒤로 가기</button>
             <button
-              onClick={handleGoToEditor}
-              disabled={curatedDomestic.length === 0 && curatedInternational.length === 0}
+              onClick={handleCurate}
+              disabled={isCurating || isTransformingCurated}
+              className="px-6 py-3 rounded-lg text-sm font-bold border-2 border-accent text-accent hover:bg-accent hover:text-white transition-all flex items-center gap-2"
+            >
+              {isCurating ? (<><span className="w-4 h-4 border-2 border-current/30 border-t-current rounded-full animate-spin"></span>재선별 중...</>) : '🔄 AI 재선별'}
+            </button>
+            <button
+              onClick={handleConfirmCuration}
+              disabled={isTransformingCurated || isCurating || (curatedDomestic.length === 0 && curatedInternational.length === 0)}
               className="btn-primary px-8 py-3 text-base font-bold flex items-center gap-2"
             >
-              📧 뉴스레터 편집하기
+              {isTransformingCurated ? (<><span className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></span>AI 편집 중...</>) : '✅ 기사 확정 후 제목, 본문 AI 편집하기'}
             </button>
           </div>
         </div>
@@ -916,7 +1088,32 @@ export default function Home() {
                     <button onClick={() => removeEditMadeleineItem(index)} className="absolute top-2 right-2 w-7 h-7 rounded border border-border text-xs text-gray-400 hover:text-red-500 hover:border-red-500 transition-colors">×</button>
                     <input type="text" placeholder="제목" className="input-field text-sm mb-2 font-bold" value={item.title} onChange={(e) => updateEditMadeleineItem(index, 'title', e.target.value)} />
                     <textarea placeholder="내용" className="input-field text-sm mb-2 min-h-[50px] resize-y" value={item.content} onChange={(e) => updateEditMadeleineItem(index, 'content', e.target.value)} />
-                    <input type="text" placeholder="링크 (선택사항)" className="input-field text-xs" value={item.link} onChange={(e) => updateEditMadeleineItem(index, 'link', e.target.value)} />
+                    <input type="text" placeholder="링크 (선택사항)" className="input-field text-xs mb-2" value={item.link} onChange={(e) => updateEditMadeleineItem(index, 'link', e.target.value)} />
+                    <div className="flex items-center gap-3 mt-1">
+                      {item.imageUrl ? (
+                        <div className="relative w-20 h-20 rounded overflow-hidden border border-border bg-gray-50 flex-shrink-0">
+                          <img src={item.imageUrl} alt="" className="w-full h-full object-cover" />
+                          <button
+                            onClick={() => updateEditMadeleineItem(index, 'imageUrl', '')}
+                            className="absolute top-0.5 right-0.5 w-5 h-5 bg-black/60 text-white text-[10px] rounded flex items-center justify-center hover:bg-red-500"
+                          >×</button>
+                        </div>
+                      ) : null}
+                      <label className="cursor-pointer flex items-center gap-2 text-xs font-bold text-accent border border-accent/30 px-3 py-1.5 rounded hover:bg-accent/5 transition-colors">
+                        📎 이미지 첨부
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleEditMadeleineImageUpload(index, file);
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
+                      {item.imageUrl && <span className="text-[10px] text-text-muted">이미지 첨부됨</span>}
+                    </div>
                   </div>
                 ))}
                 <button onClick={addEditMadeleineItem} className="text-sm text-accent font-bold hover:underline">+ 항목 추가</button>
