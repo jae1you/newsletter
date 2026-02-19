@@ -59,7 +59,7 @@ export default function Home() {
     `당신은 패션 중고/리세일 산업 전문 뉴스레터 큐레이터입니다.\n\n아래 기사 목록에서 뉴스레터에 실을 기사를 선별해 주세요.\n\n선별 기준:\n- 패션 중고/리세일/빈티지 산업과의 관련성\n- 뉴스 가치 (신규성, 영향력)\n- 주제 다양성 (같은 내용 반복 방지)\n- 독자 관심도`
   );
   const [transformPrompt, setTransformPrompt] = useState<string>(
-    `당신은 패션 중고/리세일 산업을 전문으로 다루는 프리미엄 뉴스레터 "Resale Times"의 수석 에디터입니다.\nVogue Business, Business of Fashion 수준의 고급스러운 필력을 구사하며,\n교양 있는 독자층이 "이건 꼭 읽어야 해"라고 느낄 수 있는 글을 씁니다.\n\n작업 내용:\n1. 제목을 패션 전문지 헤드라인처럼 작성할 것.\n   - 영어는 한글로 번역\n   - 단순 나열이 아닌, 핵심 인사이트를 담은 날카로운 한 문장\n   - 필요시 위트 있는 표현이나 은유를 활용 (과하지 않게)\n2. 본문 요약은 정확히 3개의 bullet point(- 형태)로 작성할 것.\n   - 각 bullet은 1~2문장, 핵심 팩트와 시사점 중심\n   - 마지막 bullet에는 가능하면 시장 전망이나 임팩트를 담을 것\n3. 문체: 격조 있되 읽기 쉬운 어조. 과도한 감탄사나 이모지 금지.\n4. 영어 기사인 경우 제목과 본문 모두 한국어로 작성할 것.`
+    `당신은 패션 중고/리세일 산업을 전문으로 다루는 프리미엄 뉴스레터 "The Resale Times"의 수석 에디터입니다.\nVogue Business, Business of Fashion 수준의 고급스러운 필력을 구사하며,\n교양 있는 독자층이 "이건 꼭 읽어야 해"라고 느낄 수 있는 글을 씁니다.\n\n작업 내용:\n1. 제목을 패션 전문지 헤드라인처럼 작성할 것.\n   - 영어는 한글로 번역\n   - 단순 나열이 아닌, 핵심 인사이트를 담은 날카로운 한 문장\n   - 필요시 위트 있는 표현이나 은유를 활용 (과하지 않게)\n2. 본문 요약은 정확히 3개의 bullet point(- 형태)로 작성할 것.\n   - 각 bullet은 1~2문장, 핵심 팩트와 시사점 중심\n   - 마지막 bullet에는 가능하면 시장 전망이나 임팩트를 담을 것\n3. 문체: 격조 있되 읽기 쉬운 어조. 과도한 감탄사나 이모지 금지.\n4. 영어 기사인 경우 제목과 본문 모두 한국어로 작성할 것.`
   );
 
   // Curation states
@@ -293,60 +293,66 @@ export default function Home() {
 
   // 선별 확정 후 transform + OG 이미지 로드 → Step 3
   const handleConfirmCuration = async () => {
-    const allCurated = [...curatedDomestic, ...curatedInternational];
-    if (allCurated.length === 0) return;
+    const allCuratedIds = [...curatedDomestic, ...curatedInternational];
+    if (allCuratedIds.length === 0) return;
 
     setIsTransformingCurated(true);
-    const updatedNews = [...newsList];
+    const currentNewsList = [...newsList];
 
-    for (const id of allCurated) {
-      const index = updatedNews.findIndex(n => n.id === id);
-      if (index === -1) continue;
+    try {
+      // 큐레이션된 기사들에 대해 루프를 돌며 필요한 변환(변역/요약) 및 OG 이미지 로드
+      for (const id of allCuratedIds) {
+        const index = currentNewsList.findIndex(n => n.id === id);
+        if (index === -1) continue;
 
-      const item = updatedNews[index];
+        const item = currentNewsList[index];
 
-      if (!item.transformedTitle) {
-        updatedNews[index] = { ...updatedNews[index], isTransforming: true };
-        setNewsList([...updatedNews]);
+        // 1. AI 변환 (이미 되어있지 않은 경우에만)
+        if (!item.transformedTitle) {
+          try {
+            const isEnglish = /[a-zA-Z]/.test(item.title);
+            const resp = await fetch('/api/ai/transform', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ title: item.title, summary: item.summary, isEnglish, transformPrompt })
+            });
+            const transformResult = await resp.json();
 
-        try {
-          const isEnglish = /[a-zA-Z]/.test(item.title);
-          const resp = await fetch('/api/ai/transform', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title: item.title, summary: item.summary, isEnglish, transformPrompt })
-          });
-          const transformResult = await resp.json();
+            currentNewsList[index] = {
+              ...currentNewsList[index],
+              transformedTitle: transformResult.title,
+              transformedSummary: transformResult.summary
+            };
+          } catch (error) {
+            console.error(`Transform error for ${id}:`, error);
+          }
+        }
 
-          updatedNews[index] = {
-            ...updatedNews[index],
-            transformedTitle: transformResult.title,
-            transformedSummary: transformResult.summary,
-            isTransforming: false
-          };
-        } catch {
-          updatedNews[index] = { ...updatedNews[index], isTransforming: false };
+        // 2. OG 이미지 로드 (이미 불러오지 않은 경우에만)
+        if (!item.ogImageUrl) {
+          try {
+            const ogData = await fetchOgImage(item.link);
+            currentNewsList[index] = {
+              ...currentNewsList[index],
+              ogImageUrl: ogData.imageUrl,
+              faviconUrl: ogData.faviconUrl
+            };
+          } catch (error) {
+            console.error(`OG focus error for ${id}:`, error);
+          }
         }
       }
 
-      if (!item.ogImageUrl) {
-        try {
-          const ogData = await fetchOgImage(item.link);
-          updatedNews[index] = {
-            ...updatedNews[index],
-            ogImageUrl: ogData.imageUrl,
-            faviconUrl: ogData.faviconUrl
-          };
-        } catch {
-          // ignore
-        }
-      }
-
-      setNewsList([...updatedNews]);
+      // 최종적으로 업데이트된 리스트를 상태에 반영
+      setNewsList(currentNewsList);
+      // 뉴스레터 에디터로 이동할 때 최신 리스트를 직접 전달하여 비동기 상태 누락 방지
+      handleGoToEditor(currentNewsList);
+    } catch (error) {
+      console.error('Confirm curation error:', error);
+      alert('기사 처리 중 오류가 발생했습니다.');
+    } finally {
+      setIsTransformingCurated(false);
     }
-
-    setIsTransformingCurated(false);
-    handleGoToEditor();
   };
 
   const toggleCuratedArticle = (id: string, section: 'domestic' | 'international') => {
@@ -389,10 +395,11 @@ export default function Home() {
   };
 
   // Prepare editor data and go to Step 3
-  const handleGoToEditor = () => {
+  const handleGoToEditor = (currentList?: NewsItem[]) => {
+    const listToUse = currentList || newsList;
     const toEditable = (ids: string[]): EditableArticle[] =>
       ids.map(id => {
-        const n = newsList.find(a => a.id === id);
+        const n = listToUse.find(a => a.id === id);
         if (!n) return null;
         return {
           id: n.id,
@@ -634,7 +641,7 @@ export default function Home() {
         <div className="bg-accent/5 px-4 py-1.5 rounded-full text-accent text-xs font-bold mb-4 tracking-widest uppercase">
           Newsletter AI Assistant
         </div>
-        <h1 className="text-4xl font-extrabold mb-2 tracking-tight">Resale Times</h1>
+        <h1 className="text-4xl font-extrabold mb-2 tracking-tight">The Resale Times</h1>
         <p className="text-text-muted text-lg font-medium">프리미엄 중고의류 뉴스레터 자동 생성기</p>
       </header>
 
@@ -653,11 +660,10 @@ export default function Home() {
                 else if (step.key === 'curate' && (curatedDomestic.length > 0 || curatedInternational.length > 0)) setCurrentStep('curate');
                 else if (step.key === 'newsletter' && (editDomestic.length > 0 || editInternational.length > 0)) setCurrentStep('newsletter');
               }}
-              className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold transition-all ${
-                currentStep === step.key
-                  ? 'bg-accent text-white shadow-lg shadow-accent/20'
-                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-              }`}
+              className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold transition-all ${currentStep === step.key
+                ? 'bg-accent text-white shadow-lg shadow-accent/20'
+                : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                }`}
             >
               <span>{step.icon}</span>
               {step.label}
@@ -922,11 +928,11 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Madeleine Memory News */}
+          {/* RELAY News */}
           <div className="premium-card">
             <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
               <span className="text-xl">💬</span>
-              마들렌메모리 뉴스
+              RELAY 뉴스
             </h2>
             <p className="text-sm text-text-muted mb-4">뉴스레터에 포함할 자체 소식을 직접 입력해 주세요.</p>
             {madeleineNews.map((item, index) => (
@@ -1080,7 +1086,7 @@ export default function Home() {
               {/* Madeleine editor */}
               <div>
                 <h3 className="text-base font-bold mb-3 flex items-center gap-2 tracking-wide uppercase">
-                  Madeleine Memory News
+                  RELAY News
                   <span className="text-xs font-normal text-text-muted normal-case tracking-normal">({editMadeleine.length})</span>
                 </h3>
                 {editMadeleine.map((item, index) => (
